@@ -1,27 +1,33 @@
-import { OllamaClient } from './ollama_client';
+import * as vscode from 'vscode';
+import { VectorStore, Document } from './vector_store';
 
 export class AnalyzerAgent {
-    private client = new OllamaClient();
+    private vectorStore = new VectorStore();
 
-    public async analyzeContext(description: string, workspaceFiles: string[]): Promise<{ filesToRead: string[], tokensUsed: number }> {
-        const systemPrompt = `You are an expert Codebase Analyzer Agent.
-Your goal is to identify which files from the workspace are most relevant to the given task description.
-Respond ONLY with a JSON array of up to 3 file paths.
-Example: ["src/index.ts", "package.json"]`;
-
-        const prompt = `Task Description:\n${description}\n\nWorkspace Files:\n${workspaceFiles.join('\n')}`;
-        const { response, tokensUsed } = await this.client.generate(prompt, systemPrompt, "json");
+    public async analyzeContext(description: string, workspaceFolder: vscode.WorkspaceFolder): Promise<{ filesToRead: string[], tokensUsed: number }> {
+        // Find all code files, ignoring typical exclusions
+        const uris = await vscode.workspace.findFiles('**/*.*', '{**/node_modules/**,**/.git/**,**/out/**,**/dist/**,**/*.png,**/*.jpg,**/*.vsix}');
         
-        let filesToRead: string[] = [];
-        try {
-            filesToRead = JSON.parse(response);
-            if (!Array.isArray(filesToRead)) {
-                filesToRead = [];
+        const docs: Document[] = [];
+        // Read file contents (limit to first 1000 files to avoid memory crash in this demo)
+        const limit = Math.min(uris.length, 1000);
+        for (let i = 0; i < limit; i++) {
+            try {
+                const fileData = await vscode.workspace.fs.readFile(uris[i]);
+                const relativePath = vscode.workspace.asRelativePath(uris[i]);
+                docs.push({ id: relativePath, text: Buffer.from(fileData).toString('utf8') });
+            } catch (e) {
+                // Ignore unreadable files
             }
-        } catch (e) {
-            console.error("Failed to parse Analyzer response: ", response);
         }
-        
-        return { filesToRead, tokensUsed };
+
+        // Add documents to Vector Store (which fetches embeddings)
+        await this.vectorStore.addDocuments(docs);
+
+        // Perform semantic search
+        const results = await this.vectorStore.search(description, 3);
+        const filesToRead = results.map(doc => doc.id);
+
+        return { filesToRead, tokensUsed: 0 }; // Tokens used for embeddings are tracked separately by OpenAI billing
     }
 }

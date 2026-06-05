@@ -1,7 +1,7 @@
-import { OllamaClient } from './ollama_client';
+import { LLMClient } from './llm_client';
 
 export class CriticAgent {
-    private client = new OllamaClient();
+    private client = new LLMClient();
 
     public async reviewCode(implementationCode: string, testsCode: string): Promise<{ approved: boolean, feedback: string, tokensUsed: number }> {
         const systemPrompt = `You are a strict, senior Code Reviewer Agent.

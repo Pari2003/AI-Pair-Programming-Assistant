@@ -1,7 +1,7 @@
-import { OllamaClient } from './ollama_client';
+import { LLMClient } from './llm_client';
 
 export class PlannerAgent {
-    private client = new OllamaClient();
+    private client = new LLMClient();
 
     public async createPlan(description: string): Promise<{ steps: string[], tokensUsed: number }> {
         const systemPrompt = `You are an expert Software Architect Planner Agent. 

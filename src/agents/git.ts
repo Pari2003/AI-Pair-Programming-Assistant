@@ -1,11 +1,11 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { OllamaClient } from './ollama_client';
+import { LLMClient } from './llm_client';
 
 const execPromise = promisify(exec);
 
 export class GitAgent {
-    private client = new OllamaClient();
+    private client = new LLMClient();
 
     public async autoCommit(cwd: string): Promise<string> {
         try {

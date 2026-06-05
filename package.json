@@ -13,6 +13,13 @@
   "activationEvents": [
     "onCommand:aiAssistant.startTask"
   ],
+  "publisher": "Pari2003",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Pari2003/AI-Pair-Programming-Assistant.git"
+  },
+  "license": "MIT",
+  "icon": "icon.png",
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -41,6 +48,42 @@
           "name": "Chat Interface"
         }
       ]
+    },
+    "configuration": {
+      "title": "AI Assistant Settings",
+      "properties": {
+        "aiAssistant.modelProvider": {
+          "type": "string",
+          "default": "Ollama",
+          "enum": ["Ollama", "OpenAI", "Anthropic"],
+          "description": "Select the LLM provider to use for the AI Assistant."
+        },
+        "aiAssistant.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API Key (required if OpenAI is selected as provider or for vector embeddings)."
+        },
+        "aiAssistant.openaiModel": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "The OpenAI model to use."
+        },
+        "aiAssistant.anthropicApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API Key (required if Anthropic is selected)."
+        },
+        "aiAssistant.anthropicModel": {
+          "type": "string",
+          "default": "claude-3-5-sonnet-20240620",
+          "description": "The Anthropic model to use."
+        },
+        "aiAssistant.ollamaModel": {
+          "type": "string",
+          "default": "llama3.2:1b",
+          "description": "The local Ollama model to use."
+        }
+      }
     }
   },
   "scripts": {

@@ -1,7 +1,7 @@
-import { OllamaClient } from './ollama_client';
+import { LLMClient } from './llm_client';
 
 export class TesterAgent {
-    private client = new OllamaClient();
+    private client = new LLMClient();
 
     public async writeTests(planSteps: string[]): Promise<{ code: string, tokensUsed: number }> {
         const systemPrompt = `You are an expert QA Engineer Agent. 

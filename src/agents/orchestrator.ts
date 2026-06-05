@@ -50,10 +50,7 @@ export class AgentOrchestrator {
             let enrichedDescription = description;
             
             if (workspaceFolder) {
-                // Ignore node_modules, .git, and out directories
-                const uris = await vscode.workspace.findFiles('**/*.*', '{**/node_modules/**,**/.git/**,**/out/**}');
-                const filePaths = uris.map(u => vscode.workspace.asRelativePath(u));
-                const { filesToRead, tokensUsed: analyzerTokens } = await this.analyzer.analyzeContext(description, filePaths);
+                const { filesToRead, tokensUsed: analyzerTokens } = await this.analyzer.analyzeContext(description, workspaceFolder);
                 totalTokens += analyzerTokens;
                 
                 if (filesToRead.length > 0) {

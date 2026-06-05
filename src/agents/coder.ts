@@ -1,4 +1,4 @@
-import { OllamaClient } from './ollama_client';
+import { LLMClient } from './llm_client';
 
 export interface FileOperation {
     type: 'create_folder' | 'write_file' | 'run_command';
@@ -8,7 +8,7 @@ export interface FileOperation {
 }
 
 export class CoderAgent {
-    private client = new OllamaClient();
+    private client = new LLMClient();
 
     public async writeCode(planSteps: string[], testsCode: string, feedback: string): Promise<{ operations: FileOperation[], tokensUsed: number }> {
         const systemPrompt = `You are an expert Senior Software Engineer Agent. 
