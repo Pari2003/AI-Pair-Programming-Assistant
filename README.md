@@ -42,6 +42,37 @@ The AI Pair Programming Assistant is built on a **Multi-Agent Orchestration Mode
 
 ### The Agentic Loop
 
+```mermaid
+flowchart TD
+    User([User]) -->|Submits Task| Orch[Agent Orchestrator]
+    
+    Orch -->|1. Context| Analyzer[Analyzer Agent]
+    Analyzer -->|Relevant Files| Orch
+    
+    Orch -->|2. Goal + Context| Planner[Planner Agent]
+    Planner -->|JSON Plan| Orch
+    
+    Orch -->|3. Plan| Tester[Tester Agent]
+    Tester -->|Unit Tests| Orch
+    
+    subgraph Self_Review [Self-Review & Healing Loop]
+        direction TB
+        Coder[Coder Agent] -->|Proposed Operations| Critic[Critic Agent]
+        Critic -->|Rejects with Feedback| Coder
+    end
+    
+    Orch -->|4. Plan + Tests| Coder
+    Critic -->|5. Approves| HitL{Human-in-the-Loop}
+    
+    HitL -->|Rejects| Abort([Abort])
+    HitL -->|Approves| Exec[6. Execute Operations]
+    
+    Exec -->|Command Fails| Orch
+    Exec -->|Success| Git[7. Git Agent]
+    
+    Git -->|Semantic Commit| Done([Task Complete])
+```
+
 When a user submits a task via the Chat UI, the `AgentOrchestrator` coordinates the following sequence:
 
 #### 1. Context Analysis (`AnalyzerAgent`)
