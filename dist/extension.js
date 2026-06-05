@@ -265,12 +265,14 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AgentOrchestrator = void 0;
 const vscode = __importStar(__webpack_require__(1));
-const planner_1 = __webpack_require__(6);
-const tester_1 = __webpack_require__(9);
-const coder_1 = __webpack_require__(10);
-const critic_1 = __webpack_require__(11);
-const uuid_1 = __webpack_require__(12);
+const analyzer_1 = __webpack_require__(6);
+const planner_1 = __webpack_require__(9);
+const tester_1 = __webpack_require__(10);
+const coder_1 = __webpack_require__(11);
+const critic_1 = __webpack_require__(12);
+const uuid_1 = __webpack_require__(13);
 class AgentOrchestrator {
+    analyzer;
     planner;
     tester;
     coder;
@@ -278,6 +280,7 @@ class AgentOrchestrator {
     db;
     constructor(db) {
         this.db = db;
+        this.analyzer = new analyzer_1.AnalyzerAgent();
         this.planner = new planner_1.PlannerAgent();
         this.tester = new tester_1.TesterAgent();
         this.coder = new coder_1.CoderAgent();
@@ -290,9 +293,34 @@ class AgentOrchestrator {
         let iterations = 0;
         let success = false;
         try {
+            // Step 0: Analyze Context
+            vscode.window.showInformationMessage('Analyzer Agent: Scanning workspace context...');
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            let enrichedDescription = description;
+            if (workspaceFolder) {
+                // Ignore node_modules, .git, and out directories
+                const uris = await vscode.workspace.findFiles('**/*.*', '{**/node_modules/**,**/.git/**,**/out/**}');
+                const filePaths = uris.map(u => vscode.workspace.asRelativePath(u));
+                const { filesToRead, tokensUsed: analyzerTokens } = await this.analyzer.analyzeContext(description, filePaths);
+                totalTokens += analyzerTokens;
+                if (filesToRead.length > 0) {
+                    let contextStr = '\n\n--- Context Files ---\n';
+                    for (const filePath of filesToRead) {
+                        try {
+                            const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
+                            const fileData = await vscode.workspace.fs.readFile(fileUri);
+                            contextStr += `\nFile: ${filePath}\n\`\`\`\n${Buffer.from(fileData).toString('utf8')}\n\`\`\`\n`;
+                        }
+                        catch (e) {
+                            console.error(`Failed to read context file: ${filePath}`);
+                        }
+                    }
+                    enrichedDescription += contextStr;
+                }
+            }
             // Step 1: Planning
             vscode.window.showInformationMessage('Planner Agent: Analyzing task...');
-            const plan = await this.planner.createPlan(description);
+            const plan = await this.planner.createPlan(enrichedDescription);
             totalTokens += plan.tokensUsed;
             // Step 2: TDD Loop (Write Tests First)
             vscode.window.showInformationMessage('Tester Agent: Writing unit tests...');
@@ -323,7 +351,6 @@ class AgentOrchestrator {
             }
             if (success && currentOperations.length > 0) {
                 // Human-in-the-loop Validation
-                const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
                 if (!workspaceFolder)
                     throw new Error("No workspace folder open.");
                 const previewText = currentOperations.map(op => `[${op.type.toUpperCase()}] ${op.path}`).join('\n');
@@ -379,28 +406,31 @@ exports.AgentOrchestrator = AgentOrchestrator;
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.PlannerAgent = void 0;
+exports.AnalyzerAgent = void 0;
 const ollama_client_1 = __webpack_require__(7);
-class PlannerAgent {
+class AnalyzerAgent {
     client = new ollama_client_1.OllamaClient();
-    async createPlan(description) {
-        const systemPrompt = `You are an expert Software Architect Planner Agent. 
-Given a task description, break it down into 3-5 explicit, actionable technical steps.
-Respond ONLY with a JSON array of strings representing the steps. Example: ["Step 1...", "Step 2..."]`;
-        const { response, tokensUsed } = await this.client.generate(description, systemPrompt, "json");
+    async analyzeContext(description, workspaceFiles) {
+        const systemPrompt = `You are an expert Codebase Analyzer Agent.
+Your goal is to identify which files from the workspace are most relevant to the given task description.
+Respond ONLY with a JSON array of up to 3 file paths.
+Example: ["src/index.ts", "package.json"]`;
+        const prompt = `Task Description:\n${description}\n\nWorkspace Files:\n${workspaceFiles.join('\n')}`;
+        const { response, tokensUsed } = await this.client.generate(prompt, systemPrompt, "json");
+        let filesToRead = [];
         try {
-            // Attempt to extract the JSON array from the response if the LLM added formatting
-            const jsonStr = response.substring(response.indexOf('['), response.lastIndexOf(']') + 1);
-            const steps = JSON.parse(jsonStr);
-            return { steps, tokensUsed };
+            filesToRead = JSON.parse(response);
+            if (!Array.isArray(filesToRead)) {
+                filesToRead = [];
+            }
         }
         catch (e) {
-            console.error("Failed to parse Planner response: ", response);
-            return { steps: [description], tokensUsed }; // fallback
+            console.error("Failed to parse Analyzer response: ", response);
         }
+        return { filesToRead, tokensUsed };
     }
 }
-exports.PlannerAgent = PlannerAgent;
+exports.AnalyzerAgent = AnalyzerAgent;
 
 
 /***/ }),
@@ -517,6 +547,36 @@ module.exports = require("http");
 
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.PlannerAgent = void 0;
+const ollama_client_1 = __webpack_require__(7);
+class PlannerAgent {
+    client = new ollama_client_1.OllamaClient();
+    async createPlan(description) {
+        const systemPrompt = `You are an expert Software Architect Planner Agent. 
+Given a task description, break it down into 3-5 explicit, actionable technical steps.
+Respond ONLY with a JSON array of strings representing the steps. Example: ["Step 1...", "Step 2..."]`;
+        const { response, tokensUsed } = await this.client.generate(description, systemPrompt, "json");
+        try {
+            // Attempt to extract the JSON array from the response if the LLM added formatting
+            const jsonStr = response.substring(response.indexOf('['), response.lastIndexOf(']') + 1);
+            const steps = JSON.parse(jsonStr);
+            return { steps, tokensUsed };
+        }
+        catch (e) {
+            console.error("Failed to parse Planner response: ", response);
+            return { steps: [description], tokensUsed }; // fallback
+        }
+    }
+}
+exports.PlannerAgent = PlannerAgent;
+
+
+/***/ }),
+/* 10 */
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.TesterAgent = void 0;
 const ollama_client_1 = __webpack_require__(7);
 class TesterAgent {
@@ -537,7 +597,7 @@ exports.TesterAgent = TesterAgent;
 
 
 /***/ }),
-/* 10 */
+/* 11 */
 /***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 
@@ -584,7 +644,7 @@ exports.CoderAgent = CoderAgent;
 
 
 /***/ }),
-/* 11 */
+/* 12 */
 /***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 
@@ -631,7 +691,7 @@ exports.CriticAgent = CriticAgent;
 
 
 /***/ }),
-/* 12 */
+/* 13 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -646,15 +706,15 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   validate: () => (/* reexport safe */ _validate_js__WEBPACK_IMPORTED_MODULE_6__["default"]),
 /* harmony export */   version: () => (/* reexport safe */ _version_js__WEBPACK_IMPORTED_MODULE_5__["default"])
 /* harmony export */ });
-/* harmony import */ var _v1_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(13);
-/* harmony import */ var _v3_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(19);
-/* harmony import */ var _v4_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(23);
-/* harmony import */ var _v5_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(25);
-/* harmony import */ var _nil_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(27);
-/* harmony import */ var _version_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(28);
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(17);
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(16);
-/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(21);
+/* harmony import */ var _v1_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(14);
+/* harmony import */ var _v3_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(20);
+/* harmony import */ var _v4_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(24);
+/* harmony import */ var _v5_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(26);
+/* harmony import */ var _nil_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(28);
+/* harmony import */ var _version_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(29);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(18);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(17);
+/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(22);
 
 
 
@@ -666,15 +726,15 @@ __webpack_require__.r(__webpack_exports__);
 
 
 /***/ }),
-/* 13 */
+/* 14 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(14);
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(16);
+/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(15);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(17);
 
  // **`v1()` - Generate time-based UUID**
 //
@@ -772,14 +832,14 @@ function v1(options, buf, offset) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v1);
 
 /***/ }),
-/* 14 */
+/* 15 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (/* binding */ rng)
 /* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(15);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
 /* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 const rnds8Pool = new Uint8Array(256); // # of random values to pre-allocate
@@ -795,13 +855,13 @@ function rng() {
 }
 
 /***/ }),
-/* 15 */
+/* 16 */
 /***/ ((module) => {
 
 module.exports = require("crypto");
 
 /***/ }),
-/* 16 */
+/* 17 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -809,7 +869,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__),
 /* harmony export */   unsafeStringify: () => (/* binding */ unsafeStringify)
 /* harmony export */ });
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(17);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
 
 /**
  * Convert array of 16 byte values to UUID string format of the form:
@@ -845,14 +905,14 @@ function stringify(arr, offset = 0) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (stringify);
 
 /***/ }),
-/* 17 */
+/* 18 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _regex_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
+/* harmony import */ var _regex_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(19);
 
 
 function validate(uuid) {
@@ -862,7 +922,7 @@ function validate(uuid) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (validate);
 
 /***/ }),
-/* 18 */
+/* 19 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -872,22 +932,22 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i);
 
 /***/ }),
-/* 19 */
+/* 20 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(20);
-/* harmony import */ var _md5_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(22);
+/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21);
+/* harmony import */ var _md5_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(23);
 
 
 const v3 = (0,_v35_js__WEBPACK_IMPORTED_MODULE_0__["default"])('v3', 0x30, _md5_js__WEBPACK_IMPORTED_MODULE_1__["default"]);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v3);
 
 /***/ }),
-/* 20 */
+/* 21 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -896,8 +956,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   URL: () => (/* binding */ URL),
 /* harmony export */   "default": () => (/* binding */ v35)
 /* harmony export */ });
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
-/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(21);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(17);
+/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(22);
 
 
 
@@ -966,14 +1026,14 @@ function v35(name, version, hashfunc) {
 }
 
 /***/ }),
-/* 21 */
+/* 22 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(17);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
 
 
 function parse(uuid) {
@@ -1011,14 +1071,14 @@ function parse(uuid) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (parse);
 
 /***/ }),
-/* 22 */
+/* 23 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(15);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
 /* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 
@@ -1035,16 +1095,16 @@ function md5(bytes) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (md5);
 
 /***/ }),
-/* 23 */
+/* 24 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _native_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(24);
-/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(14);
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(16);
+/* harmony import */ var _native_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(25);
+/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(15);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(17);
 
 
 
@@ -1076,21 +1136,6 @@ function v4(options, buf, offset) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v4);
 
 /***/ }),
-/* 24 */
-/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
-
-__webpack_require__.r(__webpack_exports__);
-/* harmony export */ __webpack_require__.d(__webpack_exports__, {
-/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
-/* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(15);
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
-
-/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = ({
-  randomUUID: (crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID)
-});
-
-/***/ }),
 /* 25 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
@@ -1098,12 +1143,12 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(20);
-/* harmony import */ var _sha1_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(26);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
-
-const v5 = (0,_v35_js__WEBPACK_IMPORTED_MODULE_0__["default"])('v5', 0x50, _sha1_js__WEBPACK_IMPORTED_MODULE_1__["default"]);
-/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v5);
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = ({
+  randomUUID: (crypto__WEBPACK_IMPORTED_MODULE_0___default().randomUUID)
+});
 
 /***/ }),
 /* 26 */
@@ -1113,7 +1158,22 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(15);
+/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21);
+/* harmony import */ var _sha1_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(27);
+
+
+const v5 = (0,_v35_js__WEBPACK_IMPORTED_MODULE_0__["default"])('v5', 0x50, _sha1_js__WEBPACK_IMPORTED_MODULE_1__["default"]);
+/* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v5);
+
+/***/ }),
+/* 27 */
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+__webpack_require__.r(__webpack_exports__);
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
+/* harmony export */ });
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
 /* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 
@@ -1130,7 +1190,7 @@ function sha1(bytes) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (sha1);
 
 /***/ }),
-/* 27 */
+/* 28 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -1140,14 +1200,14 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = ('00000000-0000-0000-0000-000000000000');
 
 /***/ }),
-/* 28 */
+/* 29 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(17);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
 
 
 function version(uuid) {

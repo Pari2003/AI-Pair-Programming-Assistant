@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { DatabaseService } from '../telemetry/database';
+import { AnalyzerAgent } from './analyzer';
 import { PlannerAgent } from './planner';
 import { TesterAgent } from './tester';
 import { CoderAgent } from './coder';
@@ -7,6 +8,7 @@ import { CriticAgent } from './critic';
 import { v4 as uuidv4 } from 'uuid';
 
 export class AgentOrchestrator {
+    private analyzer: AnalyzerAgent;
     private planner: PlannerAgent;
     private tester: TesterAgent;
     private coder: CoderAgent;
@@ -15,6 +17,7 @@ export class AgentOrchestrator {
 
     constructor(db: DatabaseService) {
         this.db = db;
+        this.analyzer = new AnalyzerAgent();
         this.planner = new PlannerAgent();
         this.tester = new TesterAgent();
         this.coder = new CoderAgent();
@@ -29,9 +32,36 @@ export class AgentOrchestrator {
         let success = false;
 
         try {
+            // Step 0: Analyze Context
+            vscode.window.showInformationMessage('Analyzer Agent: Scanning workspace context...');
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+            let enrichedDescription = description;
+            
+            if (workspaceFolder) {
+                // Ignore node_modules, .git, and out directories
+                const uris = await vscode.workspace.findFiles('**/*.*', '{**/node_modules/**,**/.git/**,**/out/**}');
+                const filePaths = uris.map(u => vscode.workspace.asRelativePath(u));
+                const { filesToRead, tokensUsed: analyzerTokens } = await this.analyzer.analyzeContext(description, filePaths);
+                totalTokens += analyzerTokens;
+                
+                if (filesToRead.length > 0) {
+                    let contextStr = '\n\n--- Context Files ---\n';
+                    for (const filePath of filesToRead) {
+                        try {
+                            const fileUri = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
+                            const fileData = await vscode.workspace.fs.readFile(fileUri);
+                            contextStr += `\nFile: ${filePath}\n\`\`\`\n${Buffer.from(fileData).toString('utf8')}\n\`\`\`\n`;
+                        } catch (e) {
+                            console.error(`Failed to read context file: ${filePath}`);
+                        }
+                    }
+                    enrichedDescription += contextStr;
+                }
+            }
+
             // Step 1: Planning
             vscode.window.showInformationMessage('Planner Agent: Analyzing task...');
-            const plan = await this.planner.createPlan(description);
+            const plan = await this.planner.createPlan(enrichedDescription);
             totalTokens += plan.tokensUsed;
 
             // Step 2: TDD Loop (Write Tests First)
@@ -68,7 +98,6 @@ export class AgentOrchestrator {
 
             if (success && currentOperations.length > 0) {
                 // Human-in-the-loop Validation
-                const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
                 if (!workspaceFolder) throw new Error("No workspace folder open.");
 
                 const previewText = currentOperations.map(op => `[${op.type.toUpperCase()}] ${op.path}`).join('\n');
