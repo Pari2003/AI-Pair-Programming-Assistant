@@ -5,7 +5,12 @@ import { PlannerAgent } from './planner';
 import { TesterAgent } from './tester';
 import { CoderAgent } from './coder';
 import { CriticAgent } from './critic';
+import { GitAgent } from './git';
 import { v4 as uuidv4 } from 'uuid';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execPromise = promisify(exec);
 
 export class AgentOrchestrator {
     private analyzer: AnalyzerAgent;
@@ -13,6 +18,7 @@ export class AgentOrchestrator {
     private tester: TesterAgent;
     private coder: CoderAgent;
     private critic: CriticAgent;
+    private git: GitAgent;
     private db: DatabaseService;
 
     constructor(db: DatabaseService) {
@@ -22,6 +28,7 @@ export class AgentOrchestrator {
         this.tester = new TesterAgent();
         this.coder = new CoderAgent();
         this.critic = new CriticAgent();
+        this.git = new GitAgent();
     }
 
     public async runTask(description: string, onMessage?: (msg: string) => void) {
@@ -120,16 +127,34 @@ export class AgentOrchestrator {
 
                 if (userChoice === 'Approve & Apply') {
                     for (const op of currentOperations) {
-                        const targetUri = vscode.Uri.joinPath(workspaceFolder.uri, op.path);
-                        if (op.type === 'create_folder') {
-                            await vscode.workspace.fs.createDirectory(targetUri);
-                        } else if (op.type === 'write_file' && op.content) {
-                            const parentDir = vscode.Uri.joinPath(targetUri, '..');
-                            await vscode.workspace.fs.createDirectory(parentDir); // Ensure parent exists
-                            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(op.content, 'utf8'));
+                        if (op.type === 'run_command' && op.command) {
+                            try {
+                                log(`Running command: ${op.command}`);
+                                const { stdout } = await execPromise(op.command, { cwd: workspaceFolder.uri.fsPath });
+                                log(`Command stdout: ${stdout}`);
+                            } catch (e: any) {
+                                log(`Command failed: ${e.message}`);
+                                log('Self-Healing: Triggering new agent loop to fix the error...');
+                                await this.runTask(`The command "${op.command}" failed with error:\n${e.message}\nPlease fix the issue.`, onMessage);
+                                return;
+                            }
+                        } else {
+                            const targetUri = vscode.Uri.joinPath(workspaceFolder.uri, op.path!);
+                            if (op.type === 'create_folder') {
+                                await vscode.workspace.fs.createDirectory(targetUri);
+                            } else if (op.type === 'write_file' && op.content) {
+                                const parentDir = vscode.Uri.joinPath(targetUri, '..');
+                                await vscode.workspace.fs.createDirectory(parentDir); // Ensure parent exists
+                                await vscode.workspace.fs.writeFile(targetUri, Buffer.from(op.content, 'utf8'));
+                            }
                         }
                     }
                     log('Changes applied successfully!');
+                    
+                    // Auto-Commit
+                    log('Auto-committing changes...');
+                    const commitMsg = await this.git.autoCommit(workspaceFolder.uri.fsPath);
+                    log(commitMsg);
                 } else {
                     log('Changes rejected by user.');
                 }

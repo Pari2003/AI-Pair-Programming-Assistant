@@ -1,9 +1,10 @@
 import { OllamaClient } from './ollama_client';
 
 export interface FileOperation {
-    type: 'create_folder' | 'write_file';
-    path: string;
+    type: 'create_folder' | 'write_file' | 'run_command';
+    path?: string;
     content?: string;
+    command?: string;
 }
 
 export class CoderAgent {
@@ -16,6 +17,7 @@ If feedback is provided from a previous failed review, you must fix the issues.
 You MUST output your response as a valid JSON array of operations. Do not include any other text.
 Example format:
 [
+  { "type": "run_command", "command": "npm install lodash" },
   { "type": "create_folder", "path": "src/components" },
   { "type": "write_file", "path": "src/index.ts", "content": "console.log('hello');" }
 ]`;

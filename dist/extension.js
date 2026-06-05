@@ -44,7 +44,7 @@ exports.deactivate = deactivate;
 const vscode = __importStar(__webpack_require__(1));
 const database_1 = __webpack_require__(2);
 const orchestrator_1 = __webpack_require__(5);
-const chatView_1 = __webpack_require__(30);
+const chatView_1 = __webpack_require__(33);
 function activate(context) {
     console.log('AI Pair Programming Assistant is now active!');
     // Initialize Telemetry Database
@@ -274,13 +274,18 @@ const planner_1 = __webpack_require__(9);
 const tester_1 = __webpack_require__(10);
 const coder_1 = __webpack_require__(11);
 const critic_1 = __webpack_require__(12);
-const uuid_1 = __webpack_require__(13);
+const git_1 = __webpack_require__(13);
+const uuid_1 = __webpack_require__(16);
+const child_process_1 = __webpack_require__(14);
+const util_1 = __webpack_require__(15);
+const execPromise = (0, util_1.promisify)(child_process_1.exec);
 class AgentOrchestrator {
     analyzer;
     planner;
     tester;
     coder;
     critic;
+    git;
     db;
     constructor(db) {
         this.db = db;
@@ -289,6 +294,7 @@ class AgentOrchestrator {
         this.tester = new tester_1.TesterAgent();
         this.coder = new coder_1.CoderAgent();
         this.critic = new critic_1.CriticAgent();
+        this.git = new git_1.GitAgent();
     }
     async runTask(description, onMessage) {
         const log = (msg) => {
@@ -369,17 +375,36 @@ class AgentOrchestrator {
                 const userChoice = await vscode.window.showInformationMessage(`The agent wants to apply ${currentOperations.length} operations to your workspace.\n\nReview the opened JSON file. Do you approve?`, { modal: true }, 'Approve & Apply', 'Reject');
                 if (userChoice === 'Approve & Apply') {
                     for (const op of currentOperations) {
-                        const targetUri = vscode.Uri.joinPath(workspaceFolder.uri, op.path);
-                        if (op.type === 'create_folder') {
-                            await vscode.workspace.fs.createDirectory(targetUri);
+                        if (op.type === 'run_command' && op.command) {
+                            try {
+                                log(`Running command: ${op.command}`);
+                                const { stdout } = await execPromise(op.command, { cwd: workspaceFolder.uri.fsPath });
+                                log(`Command stdout: ${stdout}`);
+                            }
+                            catch (e) {
+                                log(`Command failed: ${e.message}`);
+                                log('Self-Healing: Triggering new agent loop to fix the error...');
+                                await this.runTask(`The command "${op.command}" failed with error:\n${e.message}\nPlease fix the issue.`, onMessage);
+                                return;
+                            }
                         }
-                        else if (op.type === 'write_file' && op.content) {
-                            const parentDir = vscode.Uri.joinPath(targetUri, '..');
-                            await vscode.workspace.fs.createDirectory(parentDir); // Ensure parent exists
-                            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(op.content, 'utf8'));
+                        else {
+                            const targetUri = vscode.Uri.joinPath(workspaceFolder.uri, op.path);
+                            if (op.type === 'create_folder') {
+                                await vscode.workspace.fs.createDirectory(targetUri);
+                            }
+                            else if (op.type === 'write_file' && op.content) {
+                                const parentDir = vscode.Uri.joinPath(targetUri, '..');
+                                await vscode.workspace.fs.createDirectory(parentDir); // Ensure parent exists
+                                await vscode.workspace.fs.writeFile(targetUri, Buffer.from(op.content, 'utf8'));
+                            }
                         }
                     }
                     log('Changes applied successfully!');
+                    // Auto-Commit
+                    log('Auto-committing changes...');
+                    const commitMsg = await this.git.autoCommit(workspaceFolder.uri.fsPath);
+                    log(commitMsg);
                 }
                 else {
                     log('Changes rejected by user.');
@@ -626,6 +651,7 @@ If feedback is provided from a previous failed review, you must fix the issues.
 You MUST output your response as a valid JSON array of operations. Do not include any other text.
 Example format:
 [
+  { "type": "run_command", "command": "npm install lodash" },
   { "type": "create_folder", "path": "src/components" },
   { "type": "write_file", "path": "src/index.ts", "content": "console.log('hello');" }
 ]`;
@@ -705,6 +731,61 @@ exports.CriticAgent = CriticAgent;
 
 /***/ }),
 /* 13 */
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.GitAgent = void 0;
+const child_process_1 = __webpack_require__(14);
+const util_1 = __webpack_require__(15);
+const ollama_client_1 = __webpack_require__(7);
+const execPromise = (0, util_1.promisify)(child_process_1.exec);
+class GitAgent {
+    client = new ollama_client_1.OllamaClient();
+    async autoCommit(cwd) {
+        try {
+            // Check if git is initialized
+            await execPromise('git status', { cwd });
+            // Add all changes
+            await execPromise('git add .', { cwd });
+            // Get the diff
+            const { stdout: diff } = await execPromise('git diff --staged', { cwd });
+            if (!diff.trim()) {
+                return 'No changes to commit.';
+            }
+            // Generate commit message
+            const systemPrompt = `You are an expert developer. Generate a highly descriptive, semantic Git commit message based on the provided git diff.
+Follow the conventional commits format (e.g., "feat: ...", "fix: ...", "refactor: ...").
+Respond ONLY with the commit message. Do not use quotes or markdown formatting.`;
+            const { response: commitMessage } = await this.client.generate(diff, systemPrompt);
+            const cleanMessage = commitMessage.replace(/"/g, '\\"').trim();
+            // Commit
+            await execPromise(`git commit -m "${cleanMessage}"`, { cwd });
+            return `Auto-committed: ${cleanMessage}`;
+        }
+        catch (e) {
+            console.error('Auto-commit failed', e);
+            return `Auto-commit skipped: ${e.message}`;
+        }
+    }
+}
+exports.GitAgent = GitAgent;
+
+
+/***/ }),
+/* 14 */
+/***/ ((module) => {
+
+module.exports = require("child_process");
+
+/***/ }),
+/* 15 */
+/***/ ((module) => {
+
+module.exports = require("util");
+
+/***/ }),
+/* 16 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -719,15 +800,15 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   validate: () => (/* reexport safe */ _validate_js__WEBPACK_IMPORTED_MODULE_6__["default"]),
 /* harmony export */   version: () => (/* reexport safe */ _version_js__WEBPACK_IMPORTED_MODULE_5__["default"])
 /* harmony export */ });
-/* harmony import */ var _v1_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(14);
-/* harmony import */ var _v3_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(20);
-/* harmony import */ var _v4_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(24);
-/* harmony import */ var _v5_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(26);
-/* harmony import */ var _nil_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(28);
-/* harmony import */ var _version_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(29);
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(18);
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(17);
-/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(22);
+/* harmony import */ var _v1_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(17);
+/* harmony import */ var _v3_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(23);
+/* harmony import */ var _v4_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(27);
+/* harmony import */ var _v5_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(29);
+/* harmony import */ var _nil_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(31);
+/* harmony import */ var _version_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(32);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(21);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(20);
+/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(25);
 
 
 
@@ -739,15 +820,15 @@ __webpack_require__.r(__webpack_exports__);
 
 
 /***/ }),
-/* 14 */
+/* 17 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(15);
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(17);
+/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(20);
 
  // **`v1()` - Generate time-based UUID**
 //
@@ -845,14 +926,14 @@ function v1(options, buf, offset) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v1);
 
 /***/ }),
-/* 15 */
+/* 18 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (/* binding */ rng)
 /* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(19);
 /* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 const rnds8Pool = new Uint8Array(256); // # of random values to pre-allocate
@@ -868,13 +949,13 @@ function rng() {
 }
 
 /***/ }),
-/* 16 */
+/* 19 */
 /***/ ((module) => {
 
 module.exports = require("crypto");
 
 /***/ }),
-/* 17 */
+/* 20 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -882,7 +963,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__),
 /* harmony export */   unsafeStringify: () => (/* binding */ unsafeStringify)
 /* harmony export */ });
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21);
 
 /**
  * Convert array of 16 byte values to UUID string format of the form:
@@ -918,14 +999,14 @@ function stringify(arr, offset = 0) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (stringify);
 
 /***/ }),
-/* 18 */
+/* 21 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _regex_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(19);
+/* harmony import */ var _regex_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(22);
 
 
 function validate(uuid) {
@@ -935,7 +1016,7 @@ function validate(uuid) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (validate);
 
 /***/ }),
-/* 19 */
+/* 22 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -945,22 +1026,22 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i);
 
 /***/ }),
-/* 20 */
+/* 23 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21);
-/* harmony import */ var _md5_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(23);
+/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(24);
+/* harmony import */ var _md5_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(26);
 
 
 const v3 = (0,_v35_js__WEBPACK_IMPORTED_MODULE_0__["default"])('v3', 0x30, _md5_js__WEBPACK_IMPORTED_MODULE_1__["default"]);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v3);
 
 /***/ }),
-/* 21 */
+/* 24 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -969,8 +1050,8 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   URL: () => (/* binding */ URL),
 /* harmony export */   "default": () => (/* binding */ v35)
 /* harmony export */ });
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(17);
-/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(22);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(20);
+/* harmony import */ var _parse_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(25);
 
 
 
@@ -1039,14 +1120,14 @@ function v35(name, version, hashfunc) {
 }
 
 /***/ }),
-/* 22 */
+/* 25 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21);
 
 
 function parse(uuid) {
@@ -1084,14 +1165,14 @@ function parse(uuid) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (parse);
 
 /***/ }),
-/* 23 */
+/* 26 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(19);
 /* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 
@@ -1108,16 +1189,16 @@ function md5(bytes) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (md5);
 
 /***/ }),
-/* 24 */
+/* 27 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _native_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(25);
-/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(15);
-/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(17);
+/* harmony import */ var _native_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(28);
+/* harmony import */ var _rng_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(18);
+/* harmony import */ var _stringify_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(20);
 
 
 
@@ -1149,14 +1230,14 @@ function v4(options, buf, offset) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v4);
 
 /***/ }),
-/* 25 */
+/* 28 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(19);
 /* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = ({
@@ -1164,29 +1245,29 @@ __webpack_require__.r(__webpack_exports__);
 });
 
 /***/ }),
-/* 26 */
+/* 29 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21);
-/* harmony import */ var _sha1_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(27);
+/* harmony import */ var _v35_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(24);
+/* harmony import */ var _sha1_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(30);
 
 
 const v5 = (0,_v35_js__WEBPACK_IMPORTED_MODULE_0__["default"])('v5', 0x50, _sha1_js__WEBPACK_IMPORTED_MODULE_1__["default"]);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (v5);
 
 /***/ }),
-/* 27 */
+/* 30 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(16);
+/* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(19);
 /* harmony import */ var crypto__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(crypto__WEBPACK_IMPORTED_MODULE_0__);
 
 
@@ -1203,7 +1284,7 @@ function sha1(bytes) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (sha1);
 
 /***/ }),
-/* 28 */
+/* 31 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -1213,14 +1294,14 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = ('00000000-0000-0000-0000-000000000000');
 
 /***/ }),
-/* 29 */
+/* 32 */
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
-/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(18);
+/* harmony import */ var _validate_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21);
 
 
 function version(uuid) {
@@ -1234,7 +1315,7 @@ function version(uuid) {
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (version);
 
 /***/ }),
-/* 30 */
+/* 33 */
 /***/ ((__unused_webpack_module, exports) => {
 
 
