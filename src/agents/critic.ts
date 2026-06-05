@@ -17,7 +17,7 @@ Example:
 {"approved": false, "feedback": "You missed a null check on line 12 and the regex is vulnerable to ReDoS."}`;
 
         const prompt = `Implementation:\n${implementationCode}\n\nTests:\n${testsCode}`;
-        const { response, tokensUsed } = await this.client.generate(prompt, systemPrompt);
+        const { response, tokensUsed } = await this.client.generate(prompt, systemPrompt, "json");
         
         try {
             const jsonStr = response.substring(response.indexOf('{'), response.lastIndexOf('}') + 1);

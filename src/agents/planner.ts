@@ -8,7 +8,7 @@ export class PlannerAgent {
 Given a task description, break it down into 3-5 explicit, actionable technical steps.
 Respond ONLY with a JSON array of strings representing the steps. Example: ["Step 1...", "Step 2..."]`;
 
-        const { response, tokensUsed } = await this.client.generate(description, systemPrompt);
+        const { response, tokensUsed } = await this.client.generate(description, systemPrompt, "json");
         
         try {
             // Attempt to extract the JSON array from the response if the LLM added formatting

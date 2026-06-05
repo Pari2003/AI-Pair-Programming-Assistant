@@ -1,4 +1,3 @@
-import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -13,70 +12,60 @@ export interface TelemetryRecord {
 }
 
 export class DatabaseService {
-    private db: Database.Database;
+    private dbPath: string;
+    private records: TelemetryRecord[] = [];
 
     constructor(dbPath: string) {
-        // Ensure the directory exists
-        const dir = path.dirname(dbPath);
+        // Change the path to use a .json extension instead of .db
+        this.dbPath = dbPath.replace('.db', '.json');
+        
+        const dir = path.dirname(this.dbPath);
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
 
-        this.db = new Database(dbPath);
-        this.initializeSchema();
+        this.loadRecords();
     }
 
-    private initializeSchema() {
-        this.db.exec(`
-            CREATE TABLE IF NOT EXISTS telemetry (
-                id TEXT PRIMARY KEY,
-                task_description TEXT NOT NULL,
-                start_time INTEGER NOT NULL,
-                end_time INTEGER NOT NULL,
-                total_tokens INTEGER NOT NULL,
-                iterations INTEGER NOT NULL,
-                success INTEGER NOT NULL
-            );
-        `);
+    private loadRecords() {
+        if (fs.existsSync(this.dbPath)) {
+            try {
+                const data = fs.readFileSync(this.dbPath, 'utf8');
+                this.records = JSON.parse(data);
+            } catch (e) {
+                console.error("Failed to parse telemetry JSON", e);
+                this.records = [];
+            }
+        } else {
+            this.records = [];
+            this.saveRecords();
+        }
+    }
+
+    private saveRecords() {
+        fs.writeFileSync(this.dbPath, JSON.stringify(this.records, null, 2), 'utf8');
     }
 
     public logTaskCompletion(record: TelemetryRecord) {
-        const stmt = this.db.prepare(`
-            INSERT INTO telemetry (id, task_description, start_time, end_time, total_tokens, iterations, success)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `);
-        
-        stmt.run(
-            record.id,
-            record.taskDescription,
-            record.startTime,
-            record.endTime,
-            record.totalTokens,
-            record.iterations,
-            record.success ? 1 : 0
-        );
+        this.records.push(record);
+        this.saveRecords();
     }
 
     public getTelemetryStats() {
-        const rowCount = this.db.prepare("SELECT COUNT(*) as count FROM telemetry").get() as { count: number };
-        if (rowCount.count === 0) {
+        if (this.records.length === 0) {
             return { totalTasks: 0, avgIterations: 0, successRate: 0, totalTokens: 0 };
         }
 
-        const stats = this.db.prepare(`
-            SELECT 
-                COUNT(*) as totalTasks,
-                AVG(iterations) as avgIterations,
-                SUM(success) * 1.0 / COUNT(*) as successRate,
-                SUM(total_tokens) as totalTokens
-            FROM telemetry
-        `).get() as any;
+        const totalTasks = this.records.length;
+        const totalIterations = this.records.reduce((sum, r) => sum + r.iterations, 0);
+        const successfulTasks = this.records.filter(r => r.success).length;
+        const totalTokens = this.records.reduce((sum, r) => sum + r.totalTokens, 0);
 
         return {
-            totalTasks: stats.totalTasks,
-            avgIterations: stats.avgIterations,
-            successRate: stats.successRate,
-            totalTokens: stats.totalTokens
+            totalTasks: totalTasks,
+            avgIterations: totalIterations / totalTasks,
+            successRate: successfulTasks / totalTasks,
+            totalTokens: totalTokens
         };
     }
 }
