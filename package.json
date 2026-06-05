@@ -1,0 +1,76 @@
+{
+  "name": "ai-pair-programming-assistant",
+  "displayName": "AI Pair Programming Assistant",
+  "description": "Agentic Write-Refactor-Test loop with telemetry-based tracking.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onCommand:aiAssistant.startTask"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiAssistant.startTask",
+        "title": "AI Assistant: Start Task"
+      },
+      {
+        "command": "aiAssistant.showDashboard",
+        "title": "AI Assistant: Show Telemetry Dashboard"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ai-assistant-sidebar",
+          "title": "AI Pair Programming",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "ai-assistant-sidebar": [
+        {
+          "id": "ai-assistant-chat",
+          "name": "Chat Interface"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/mocha": "^10.0.1",
+    "@types/node": "18.x",
+    "@typescript-eslint/eslint-plugin": "^6.4.1",
+    "@typescript-eslint/parser": "^6.4.1",
+    "eslint": "^8.47.0",
+    "typescript": "^5.1.6",
+    "ts-loader": "^9.4.4",
+    "webpack": "^5.88.2",
+    "webpack-cli": "^5.1.4",
+    "@vscode/test-cli": "^0.0.4",
+    "@vscode/test-electron": "^2.3.4"
+  },
+  "dependencies": {
+    "better-sqlite3": "^8.5.2",
+    "zod": "^3.22.2",
+    "uuid": "^9.0.0"
+  }
+}
