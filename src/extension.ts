@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { DatabaseService } from './telemetry/database';
 import { AgentOrchestrator } from './agents/orchestrator';
+import { ChatViewProvider } from './chatView';
 
 export function activate(context: vscode.ExtensionContext) {
     console.log('AI Pair Programming Assistant is now active!');
@@ -12,7 +13,13 @@ export function activate(context: vscode.ExtensionContext) {
     // Initialize Agent Orchestrator
     const orchestrator = new AgentOrchestrator(dbService);
 
-    // Command: Start Task
+    // Register Chat View
+    const provider = new ChatViewProvider(context.extensionUri, orchestrator);
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, provider)
+    );
+
+    // Command: Start Task (Legacy Input Box)
     let startTaskDisposable = vscode.commands.registerCommand('aiAssistant.startTask', async () => {
         const taskDescription = await vscode.window.showInputBox({
             prompt: "What would you like me to build or fix?",

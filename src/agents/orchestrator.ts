@@ -24,7 +24,12 @@ export class AgentOrchestrator {
         this.critic = new CriticAgent();
     }
 
-    public async runTask(description: string) {
+    public async runTask(description: string, onMessage?: (msg: string) => void) {
+        const log = (msg: string) => {
+            vscode.window.showInformationMessage(msg);
+            if (onMessage) onMessage(msg);
+        };
+
         const taskId = uuidv4();
         const startTime = Date.now();
         let totalTokens = 0;
@@ -33,7 +38,7 @@ export class AgentOrchestrator {
 
         try {
             // Step 0: Analyze Context
-            vscode.window.showInformationMessage('Analyzer Agent: Scanning workspace context...');
+            log('Analyzer Agent: Scanning workspace context...');
             const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
             let enrichedDescription = description;
             
@@ -60,12 +65,12 @@ export class AgentOrchestrator {
             }
 
             // Step 1: Planning
-            vscode.window.showInformationMessage('Planner Agent: Analyzing task...');
+            log('Planner Agent: Analyzing task...');
             const plan = await this.planner.createPlan(enrichedDescription);
             totalTokens += plan.tokensUsed;
 
             // Step 2: TDD Loop (Write Tests First)
-            vscode.window.showInformationMessage('Tester Agent: Writing unit tests...');
+            log('Tester Agent: Writing unit tests...');
             const tests = await this.tester.writeTests(plan.steps);
             totalTokens += tests.tokensUsed;
 
@@ -76,23 +81,23 @@ export class AgentOrchestrator {
 
             while (!codeAccepted && iterations < 3) {
                 iterations++;
-                vscode.window.showInformationMessage(`Coder Agent: Writing implementation (Attempt ${iterations})...`);
+                log(`Coder Agent: Writing implementation (Attempt ${iterations})...`);
                 
                 const implementation = await this.coder.writeCode(plan.steps, tests.code, feedback);
                 totalTokens += implementation.tokensUsed;
                 currentOperations = implementation.operations;
 
-                vscode.window.showInformationMessage('Critic Agent: Reviewing code...');
+                log('Critic Agent: Reviewing code...');
                 const review = await this.critic.reviewCode(JSON.stringify(currentOperations, null, 2), tests.code);
                 totalTokens += review.tokensUsed;
 
                 if (review.approved) {
                     codeAccepted = true;
                     success = true;
-                    vscode.window.showInformationMessage('Critic Agent: Code approved!');
+                    log('Critic Agent: Code approved!');
                 } else {
                     feedback = review.feedback;
-                    vscode.window.showWarningMessage('Critic Agent: Code rejected. Refactoring...');
+                    log('Critic Agent: Code rejected. Refactoring...');
                 }
             }
 
@@ -124,16 +129,18 @@ export class AgentOrchestrator {
                             await vscode.workspace.fs.writeFile(targetUri, Buffer.from(op.content, 'utf8'));
                         }
                     }
-                    vscode.window.showInformationMessage('Changes applied successfully!');
+                    log('Changes applied successfully!');
                 } else {
-                    vscode.window.showWarningMessage('Changes rejected by user.');
+                    log('Changes rejected by user.');
                 }
             } else if (!success) {
                 vscode.window.showErrorMessage('Agentic loop failed after maximum iterations.');
+                if (onMessage) onMessage('Agentic loop failed after maximum iterations.');
             }
 
         } catch (error: any) {
             vscode.window.showErrorMessage(`Error in agentic loop: ${error.message}`);
+            if (onMessage) onMessage(`Error: ${error.message}`);
         } finally {
             // Log Telemetry
             this.db.logTaskCompletion({

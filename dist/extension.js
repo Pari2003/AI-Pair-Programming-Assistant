@@ -44,6 +44,7 @@ exports.deactivate = deactivate;
 const vscode = __importStar(__webpack_require__(1));
 const database_1 = __webpack_require__(2);
 const orchestrator_1 = __webpack_require__(5);
+const chatView_1 = __webpack_require__(30);
 function activate(context) {
     console.log('AI Pair Programming Assistant is now active!');
     // Initialize Telemetry Database
@@ -51,7 +52,10 @@ function activate(context) {
     const dbService = new database_1.DatabaseService(dbPath);
     // Initialize Agent Orchestrator
     const orchestrator = new orchestrator_1.AgentOrchestrator(dbService);
-    // Command: Start Task
+    // Register Chat View
+    const provider = new chatView_1.ChatViewProvider(context.extensionUri, orchestrator);
+    context.subscriptions.push(vscode.window.registerWebviewViewProvider(chatView_1.ChatViewProvider.viewType, provider));
+    // Command: Start Task (Legacy Input Box)
     let startTaskDisposable = vscode.commands.registerCommand('aiAssistant.startTask', async () => {
         const taskDescription = await vscode.window.showInputBox({
             prompt: "What would you like me to build or fix?",
@@ -286,7 +290,12 @@ class AgentOrchestrator {
         this.coder = new coder_1.CoderAgent();
         this.critic = new critic_1.CriticAgent();
     }
-    async runTask(description) {
+    async runTask(description, onMessage) {
+        const log = (msg) => {
+            vscode.window.showInformationMessage(msg);
+            if (onMessage)
+                onMessage(msg);
+        };
         const taskId = (0, uuid_1.v4)();
         const startTime = Date.now();
         let totalTokens = 0;
@@ -294,7 +303,7 @@ class AgentOrchestrator {
         let success = false;
         try {
             // Step 0: Analyze Context
-            vscode.window.showInformationMessage('Analyzer Agent: Scanning workspace context...');
+            log('Analyzer Agent: Scanning workspace context...');
             const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
             let enrichedDescription = description;
             if (workspaceFolder) {
@@ -319,11 +328,11 @@ class AgentOrchestrator {
                 }
             }
             // Step 1: Planning
-            vscode.window.showInformationMessage('Planner Agent: Analyzing task...');
+            log('Planner Agent: Analyzing task...');
             const plan = await this.planner.createPlan(enrichedDescription);
             totalTokens += plan.tokensUsed;
             // Step 2: TDD Loop (Write Tests First)
-            vscode.window.showInformationMessage('Tester Agent: Writing unit tests...');
+            log('Tester Agent: Writing unit tests...');
             const tests = await this.tester.writeTests(plan.steps);
             totalTokens += tests.tokensUsed;
             // Step 3: Implement & Review Loop
@@ -332,21 +341,21 @@ class AgentOrchestrator {
             let feedback = "";
             while (!codeAccepted && iterations < 3) {
                 iterations++;
-                vscode.window.showInformationMessage(`Coder Agent: Writing implementation (Attempt ${iterations})...`);
+                log(`Coder Agent: Writing implementation (Attempt ${iterations})...`);
                 const implementation = await this.coder.writeCode(plan.steps, tests.code, feedback);
                 totalTokens += implementation.tokensUsed;
                 currentOperations = implementation.operations;
-                vscode.window.showInformationMessage('Critic Agent: Reviewing code...');
+                log('Critic Agent: Reviewing code...');
                 const review = await this.critic.reviewCode(JSON.stringify(currentOperations, null, 2), tests.code);
                 totalTokens += review.tokensUsed;
                 if (review.approved) {
                     codeAccepted = true;
                     success = true;
-                    vscode.window.showInformationMessage('Critic Agent: Code approved!');
+                    log('Critic Agent: Code approved!');
                 }
                 else {
                     feedback = review.feedback;
-                    vscode.window.showWarningMessage('Critic Agent: Code rejected. Refactoring...');
+                    log('Critic Agent: Code rejected. Refactoring...');
                 }
             }
             if (success && currentOperations.length > 0) {
@@ -370,18 +379,22 @@ class AgentOrchestrator {
                             await vscode.workspace.fs.writeFile(targetUri, Buffer.from(op.content, 'utf8'));
                         }
                     }
-                    vscode.window.showInformationMessage('Changes applied successfully!');
+                    log('Changes applied successfully!');
                 }
                 else {
-                    vscode.window.showWarningMessage('Changes rejected by user.');
+                    log('Changes rejected by user.');
                 }
             }
             else if (!success) {
                 vscode.window.showErrorMessage('Agentic loop failed after maximum iterations.');
+                if (onMessage)
+                    onMessage('Agentic loop failed after maximum iterations.');
             }
         }
         catch (error) {
             vscode.window.showErrorMessage(`Error in agentic loop: ${error.message}`);
+            if (onMessage)
+                onMessage(`Error: ${error.message}`);
         }
         finally {
             // Log Telemetry
@@ -1219,6 +1232,169 @@ function version(uuid) {
 }
 
 /* harmony default export */ const __WEBPACK_DEFAULT_EXPORT__ = (version);
+
+/***/ }),
+/* 30 */
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ChatViewProvider = void 0;
+class ChatViewProvider {
+    _extensionUri;
+    orchestrator;
+    static viewType = 'aiAssistant.chatView';
+    _view;
+    constructor(_extensionUri, orchestrator) {
+        this._extensionUri = _extensionUri;
+        this.orchestrator = orchestrator;
+    }
+    resolveWebviewView(webviewView, context, _token) {
+        this._view = webviewView;
+        webviewView.webview.options = {
+            enableScripts: true,
+            localResourceRoots: [this._extensionUri]
+        };
+        webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+        webviewView.webview.onDidReceiveMessage(async (data) => {
+            switch (data.type) {
+                case 'sendTask':
+                    {
+                        const taskDescription = data.value;
+                        await this.orchestrator.runTask(taskDescription, (message) => {
+                            this.sendMessageToWebview(message);
+                        });
+                        this._view?.webview.postMessage({ type: 'taskComplete' });
+                        break;
+                    }
+            }
+        });
+    }
+    sendMessageToWebview(message) {
+        if (this._view) {
+            this._view.webview.postMessage({ type: 'agentMessage', value: message });
+        }
+    }
+    _getHtmlForWebview(webview) {
+        return `<!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>AI Assistant Chat</title>
+            <style>
+                body {
+                    font-family: var(--vscode-font-family);
+                    padding: 10px;
+                    display: flex;
+                    flex-direction: column;
+                    height: 100vh;
+                    box-sizing: border-box;
+                }
+                #chat-history {
+                    flex-grow: 1;
+                    overflow-y: auto;
+                    margin-bottom: 10px;
+                    border: 1px solid var(--vscode-panel-border);
+                    padding: 10px;
+                    background-color: var(--vscode-input-background);
+                }
+                .message {
+                    margin-bottom: 10px;
+                    padding: 8px;
+                    border-radius: 4px;
+                }
+                .user-message {
+                    background-color: var(--vscode-button-background);
+                    color: var(--vscode-button-foreground);
+                    align-self: flex-end;
+                }
+                .agent-message {
+                    background-color: var(--vscode-editor-background);
+                    color: var(--vscode-editor-foreground);
+                    border: 1px solid var(--vscode-panel-border);
+                }
+                #input-container {
+                    display: flex;
+                    flex-direction: column;
+                }
+                textarea {
+                    width: 100%;
+                    padding: 8px;
+                    box-sizing: border-box;
+                    background-color: var(--vscode-input-background);
+                    color: var(--vscode-input-foreground);
+                    border: 1px solid var(--vscode-input-border);
+                    margin-bottom: 5px;
+                    resize: vertical;
+                    min-height: 60px;
+                }
+                button {
+                    padding: 8px 12px;
+                    background-color: var(--vscode-button-background);
+                    color: var(--vscode-button-foreground);
+                    border: none;
+                    cursor: pointer;
+                }
+                button:hover {
+                    background-color: var(--vscode-button-hoverBackground);
+                }
+            </style>
+        </head>
+        <body>
+            <div id="chat-history">
+                <div class="message agent-message">Hello! I am your AI Pair Programming Assistant. What would you like to build today?</div>
+            </div>
+            <div id="input-container">
+                <textarea id="task-input" placeholder="Ask the agent to do something..."></textarea>
+                <button id="send-btn">Send</button>
+            </div>
+
+            <script>
+                const vscode = acquireVsCodeApi();
+                const chatHistory = document.getElementById('chat-history');
+                const taskInput = document.getElementById('task-input');
+                const sendBtn = document.getElementById('send-btn');
+
+                sendBtn.addEventListener('click', () => {
+                    const text = taskInput.value.trim();
+                    if (text) {
+                        appendMessage('user-message', text);
+                        vscode.postMessage({ type: 'sendTask', value: text });
+                        taskInput.value = '';
+                        sendBtn.disabled = true;
+                        sendBtn.innerText = 'Working...';
+                    }
+                });
+
+                window.addEventListener('message', event => {
+                    const message = event.data;
+                    switch (message.type) {
+                        case 'agentMessage':
+                            appendMessage('agent-message', message.value);
+                            break;
+                        case 'taskComplete':
+                            sendBtn.disabled = false;
+                            sendBtn.innerText = 'Send';
+                            appendMessage('agent-message', 'Task completed. Review the changes if a popup appeared!');
+                            break;
+                    }
+                });
+
+                function appendMessage(className, text) {
+                    const msgDiv = document.createElement('div');
+                    msgDiv.className = 'message ' + className;
+                    msgDiv.innerText = text;
+                    chatHistory.appendChild(msgDiv);
+                    chatHistory.scrollTop = chatHistory.scrollHeight;
+                }
+            </script>
+        </body>
+        </html>`;
+    }
+}
+exports.ChatViewProvider = ChatViewProvider;
+
 
 /***/ })
 /******/ 	]);
