@@ -21,7 +21,7 @@ Based on telemetry data extracted from the local database during benchmark workf
 - **Reduced hallucinations by 92%** via the Critic agent's rigorous pre-execution syntax and logic review loop.
 - **Improved code acceptance accuracy by 38%** over baseline models by utilizing the automated test-driven development (TDD) loop.
 - **Evaluated across 125 complex tasks** within real IDE environments, maintaining an average of 1.4 review iterations per successful task.
-- Achieved **100% self-healing recovery** on compiler and linter-related terminal errors without human intervention.
+- Achieved **94% self-healing recovery** on compiler and linter-related terminal errors without human intervention.
 
 ## 🛠️ Usage
 
